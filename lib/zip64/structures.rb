@@ -53,6 +53,10 @@ class Block
 		self.class.fields()
 	end
 
+	def self.base_size
+		fields.inject(0) { |t, f| size_of(f.type) + t }
+	end
+
 	def self.read_from(fp, offset)
 		o = new()
 		fields[offset..-1].each do |field|

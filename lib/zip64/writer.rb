@@ -41,9 +41,10 @@ class ZipWriter
 		filename ||= File.basename(io.path) if io.respond_to?(:path) && io.path
 		filename ||= "file-#{@dir_entries.size+2}.dat"
 
+		# XXX: this doesn't fit well with the planned usage :(
 		data = io.read
 
-		crc = Zlib.crc32(data,0)
+		crc = Zlib.crc32(data, 0)
 
 		header = LocalFileHeader.new(
 			:flags => 0,
@@ -58,31 +59,31 @@ class ZipWriter
 			:header_id => Zip64ExtraField::ID,
 			:header_len => 16,
 			:raw_data_len => data.size,
-			:data_len => data.size).to_string
+			:data_len => data.size
+		).to_string
 
 		@dir_entries << {
 			:local_header => header,
 			:offset => @offset,
 			:len => data.size
 		}
+
 		# write output
 		write header.to_string
 
+		
 		# write data (& any compression?)
 		write data
-		# write descriptor
 
-		#write DD64.new(:crc32 => crc,
+		# write descriptor - not need with current strategy
+		# write DD64.new(:crc32 => crc,
 		#			:data_len => data.size,
 		#			:raw_data_len => data.size).to_string
 	end
 
-	def close
-		#[archive decryption header]
-		#[archive extra data record] 
-		#[central directory]
+	def write_central_directory
 		align
-		cd_offset = @offset
+		@central_directory_offset = @offset
 		
 		@dir_entries.each do |entry|
 			offset = entry[:offset]
@@ -112,53 +113,105 @@ class ZipWriter
 			).to_string
 		end
 
-		#write DigSig.new(
-		#	:data => ''
-		#).to_string
+		# Central Directory Size
+		@central_directory_size = @offset - @central_directory_offset
+	end
 
-		cd_size = @offset - cd_offset #	Central Directory Size
-
-		#[zip64 end of central directory record]
-		z64_cd_offset = @offset
+	def write_zip64_end_of_central_directory
+		@zip64_central_directory_offset = @offset
 		
 		write Zip64EOCDR.new(
-		#	:record_len => ?,  # auto-filled in
 			:made_by => 45,
 			:this_disk_no => 0,
 			:disk_with_cd_no => 0,
 			:total_no_entries_on_this_disk => @dir_entries.size,
 			:total_no_entries => @dir_entries.size,
-			:size_of_cd => cd_size,
-			:offset_of_cd_wrt_disk_no => cd_offset,
+			:size_of_cd => @central_directory_size,
+			:offset_of_cd_wrt_disk_no => @central_directory_offset,
 			:data => ''
 		).to_string
+	end
 
-		#[zip64 end of central directory locator]
+	def write_zip64_end_of_central_directory_locator
 		write Zip64EOCDL.new(
 			:disk_with_z64_eocdr => 0,
 			# Assume relative offset is relative to disk, as 
 			# is case elsewhere in Zip spec
-			:relative_offset => z64_cd_offset,
+			:relative_offset => @zip64_central_directory_offset,
 			:no_disks => 1
 		).to_string
+	end
 
-		#[end of central directory record]
+	def write_end_of_central_directory_record
 		write EOCDR.new(
 			:disk_no => 0,
 			:disk_with_cd_no => 0,
 			:total_entries_in_local_cd => @dir_entries.size,
 			:total_entries => @dir_entries.size,
-			:cd_size => cd_size,
-			:offset_to_cd_start => cd_offset,
+			:cd_size => @central_directory_size,
+			:offset_to_cd_start => @central_directory_offset,
 			:file_comment => ''
 		).to_string
+	end
+
+	def close
+		#[archive decryption header]
+		# ignore
+		#[archive extra data record] 
+		# ignore
+
+		#[central directory]
+		write_central_directory()
+		
+		#[zip64 end of central directory record]
+		write_zip64_end_of_central_directory()
+
+		#[zip64 end of central directory locator]
+		write_zip64_end_of_central_directory_locator()
+
+		#[end of central directory record]
+		write_end_of_central_directory_record()
+	end
+
+	def self.get_io_size(io)
+		if io.respond_to?(:stat)
+			size = io.stat.size
+		elsif io.respond_to?(:size)
+			size = io.size
+		else
+			io.seek(0, IO::SEEK_END)
+			size = io.tell
+		end
+		size
+	end
+
+	def self.predict_size64(files)
+		file_overhead = LocalFileHeader.base_size +
+				Zip64ExtraField.base_size
+
+		total = 0
+		names_size = 0
+		files.each do |name, io|
+			names_size += name.size
+			total += get_io_size(io) + name.size + file_overhead
+		end
+
+		until (total%4).zero?
+			total += 1
+		end
+
+		total += files.size * (CDFileHeader.base_size + Zip64CDExtraField.base_size)
+		total += names_size
+
+		total += EOCDR.base_size + Zip64EOCDL.base_size + Zip64EOCDR.base_size
+
+		total
 	end
 
 	protected
 	def align
 		until (@offset % 4).zero?
-			@io << "\0"
-			@offset += 1
+			write_raw "\0"
 		end
 	end
 	def write(bytes)
@@ -170,23 +223,29 @@ class ZipWriter
 		@offset += bytes.size
 	end
 
-	class FakeIO
-		def initialize(buf)
-			@io = StringIO.new(buf)
-		end
-		def read
-			@io.read
-		end
-	end
 	def self.test
+		files = { }
+		15.times do |x|
+			files["foo-#{x}.txt"] = io = StringIO.new("Foo is #{x} and #{x * x}")
+			(rand()*500).to_i.times do |y|
+				io.puts "And some more lines about blah"
+			end
+			io.rewind
+		end
+		x = predict_size64(files)
 		File.open("test.zip", "w") do |fp|
 			ZipWriter.new(fp) do |writer|
-				15.times do |x|
-				writer.add_entry(StringIO.new("Foo - #{x} and the \n"),
-								 :name => "foo-#{x}.txt", :mtime => Time.now)
+				files.each do |key, io|
+					writer.add_entry(io, :name => key, :mtime => Time.now)
 				end
 			end
+			p [:guess, x, :actual, fp.tell]
 		end
+	end
+end
+class EventMachineWriter < ZipWriter
+	def write_raw(bytes)
+		@io.send_data(bytes)
 	end
 end
 end
