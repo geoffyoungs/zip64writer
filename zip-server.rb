@@ -13,37 +13,59 @@ $:<< '../lib' << 'lib'
 require 'goliath'
 require 'zip64/writer'
 
-class ChunkedStreaming < Goliath::API
+class ZipStream < Goliath::API
   def on_close(env)
     env.logger.info "Connection closed."
   end
 
   BUF = (1024 * 1024) # 1 mb
 
+
+
   def response(env)
 	env.logger.info(env.inspect)
+	env.logger.info("Self: "+self.inspect)
+	env.logger.info("Instance variables: "+instance_variables.sort.inspect)
 
-	manifest = Dir["/media/nas/StockArt/*.jpg"]
+	filename = "sample.zip"
+	manifest = Dir["/home/geoff/Photos/*.jpg"]
 
-	writer = Zip64::EventMachineWriter.new(env)
+	writer = Zip64::GoliathWriter.new(env)
 
-	send_next = lambda do
-		entry = manifest.shift
-		writer.add_entry(File.open(entry), :name => File.basename(entry))
-	end
-
-	until manifest.empty?
-		if env.request.conn.get_outbound_data_size >= BUF
-			EventMachine.next_tick(&send_next)
+    pt = EM.add_periodic_timer(0.1) do
+      	entry = manifest.shift
+		if entry
+			File.open(entry, 'rb') { |fp|
+				time = Time.now
+				#env.logger.info("Writing: #{entry}")
+				writer.add_entry(fp, :name => File.basename(entry), :mtime => time)
+			}
 		else
-			send_next
+			env.logger.info("Finishing up: #{entry}")
+			writer.close
+			env.chunked_stream_close
+			pt.cancel
 		end
-	end
+    end
 
-	writer.close
-    env.chunked_stream_close
 
-    headers = { 'Content-Type' => 'application/zip', 'X-Stream' => 'Goliath' }
+	#send_next = lambda do
+	#	entry = manifest.shift
+	#	writer.add_entry(File.open(entry), :name => File.basename(entry))
+	#end
+
+	#until manifest.empty?
+	#	if env.request.conn.get_outbound_data_size >= BUF
+	#		EventMachine.next_tick(&send_next)
+	#	else
+	#		send_next
+	#	end
+	#end
+
+	#writer.close
+    #env.chunked_stream_close
+
+    headers = { 'Content-Type' => 'application/zip', 'X-Stream' => 'Goliath', 'Content-Disposition' => 'attachment; filename="%s"' % filename }
     chunked_streaming_response(200, headers)
   end
 end

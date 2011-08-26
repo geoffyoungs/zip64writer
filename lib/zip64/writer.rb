@@ -34,15 +34,15 @@ class ZipWriter
 	end
 
 	def add_entry(io, info)
-		mtime = Time.now
 		mtime = info[:mtime]
+		mtime ||= Time.now
 
 		filename = info[:name]
 		filename ||= File.basename(io.path) if io.respond_to?(:path) && io.path
 		filename ||= "file-#{@dir_entries.size+2}.dat"
 
 		# XXX: this doesn't fit well with the planned usage :(
-		data = io.read
+		data = io.read.to_s
 
 		crc = Zlib.crc32(data, 0)
 
@@ -55,12 +55,13 @@ class ZipWriter
 			:raw_data_len => LEN64,
 			:filename => filename)
 
-		header.extra_field = Zip64ExtraField.new(
+		extra = Zip64ExtraField.new(
 			:header_id => Zip64ExtraField::ID,
 			:header_len => 16,
 			:raw_data_len => data.size,
 			:data_len => data.size
-		).to_string
+		)
+		header.extra_field = extra.to_string
 
 		@dir_entries << {
 			:local_header => header,
@@ -70,7 +71,6 @@ class ZipWriter
 
 		# write output
 		write header.to_string
-
 		
 		# write data (& any compression?)
 		write data
@@ -118,6 +118,7 @@ class ZipWriter
 	end
 
 	def write_zip64_end_of_central_directory
+		#align
 		@zip64_central_directory_offset = @offset
 		
 		write Zip64EOCDR.new(
@@ -133,6 +134,7 @@ class ZipWriter
 	end
 
 	def write_zip64_end_of_central_directory_locator
+		#align
 		write Zip64EOCDL.new(
 			:disk_with_z64_eocdr => 0,
 			# Assume relative offset is relative to disk, as 
@@ -143,6 +145,7 @@ class ZipWriter
 	end
 
 	def write_end_of_central_directory_record
+		#align
 		write EOCDR.new(
 			:disk_no => 0,
 			:disk_with_cd_no => 0,
@@ -179,8 +182,10 @@ class ZipWriter
 		elsif io.respond_to?(:size)
 			size = io.size
 		else
+			pos = io.tell
 			io.seek(0, IO::SEEK_END)
 			size = io.tell
+			io.seek(pos, IO::SEEK_START)
 		end
 		size
 	end
@@ -243,9 +248,10 @@ class ZipWriter
 		end
 	end
 end
-class EventMachineWriter < ZipWriter
+class GoliathWriter < ZipWriter
 	def write_raw(bytes)
-		@io.send_data(bytes)
+		@io.chunked_stream_send(bytes)
+		@offset += bytes.size
 	end
 end
 end

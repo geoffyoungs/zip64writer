@@ -48,6 +48,9 @@ File.open(arg, "rb") do |fp|
 				data = fp.read(data_len)
 				p [:filename, filename]
 				p [:extra, extra]
+				if data.size > 50
+					data = data[0..50]+"(#{data.size} bytes, truncated)"
+				end
 				p [:data, data]
 			end
 		else
