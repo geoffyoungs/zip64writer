@@ -1,6 +1,8 @@
 #!/usr/bin/env ruby
 $:<< '../lib' << 'lib'
-
+require 'http/parser'
+require "em-synchrony"
+require "em-synchrony/em-http"
 #
 # A simple HTTP streaming API which returns a 200 response for any GET request
 # and then emits numbers 1 through 10 in 1 second intervals using Chunked
@@ -12,6 +14,9 @@ $:<< '../lib' << 'lib'
 
 require 'goliath'
 require 'zip64/writer'
+
+
+
 
 class ZipStream < Goliath::API
 	def on_close(env)
@@ -85,3 +90,9 @@ class ZipStream < Goliath::API
 		chunked_streaming_response(200, headers)
 	end
 end
+
+
+
+EM.synchrony do
+end
+
