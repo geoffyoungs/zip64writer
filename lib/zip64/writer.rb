@@ -33,47 +33,98 @@ class ZipWriter
 		end
 	end
 
-	def add_entry(io, info)
-		mtime = info[:mtime]
-		mtime ||= Time.now
+	def ensure_metadata(io, info)
+		info = info.dup
 
-		filename = info[:name]
-		filename ||= File.basename(io.path) if io.respond_to?(:path) && io.path
-		filename ||= "file-#{@dir_entries.size+2}.dat"
+		info[:mtime] ||= Time.now
 
-		# XXX: this doesn't fit well with the planned usage :(
-		data = io.read.to_s
+		info[:name] ||= File.basename(io.path) if io.respond_to?(:path) && io.path
+		info[:name] ||= "file-#{@dir_entries.size+2}.dat"
 
-		crc = Zlib.crc32(data, 0)
+		info
+	end
 
+	def make_entry32(io, info, data, crc)
 		header = LocalFileHeader.new(
 			:flags => 0,
-			:last_mod_file_time => Zip64.time_to_msdos_time(mtime),
-			:last_mod_file_date => Zip64.date_to_msdos_date(mtime),
+			:last_mod_file_time => Zip64.time_to_msdos_time(info[:mtime]),
+			:last_mod_file_date => Zip64.date_to_msdos_date(info[:mtime]),
+			:crc32 => crc,
+			:data_len => data.size,
+			:raw_data_len => data.size,
+			:filename => info[:name])
+
+		header.extra_field = ''
+
+		header
+	end
+
+	def make_entry64(io, info, data, crc)
+		header = LocalFileHeader.new(
+			:flags => 0,
+			:last_mod_file_time => Zip64.time_to_msdos_time(info[:mtime]),
+			:last_mod_file_date => Zip64.date_to_msdos_date(info[:mtime]),
 			:crc32 => crc,
 			:data_len => LEN64,
 			:raw_data_len => LEN64,
-			:filename => filename)
+			:filename => info[:name])
 
 		extra = Zip64ExtraField.new(
 			:header_id => Zip64ExtraField::ID,
 			:header_len => 16,
 			:raw_data_len => data.size,
-			:data_len => data.size
-		)
-		header.extra_field = extra.to_string
+			:data_len => data.size)
 
-		@dir_entries << {
-			:local_header => header,
-			:offset => @offset,
-			:len => data.size
-		}
+		header.extra_field = extra
+
+		header
+	end
+
+	def add_entry(io, info)
+		info = ensure_metadata(io, info)
+
+		data = io.read.to_s
+		crc = Zlib.crc32(data, 0)
+
+		# XXX: this doesn't fit well with the planned usage :(
+		entry = { :offset => @offset, :len => data.size }
+		@dir_entries << entry
+
+		if info[:use] == 64 || @offset + data.size > self.threshold
+			header = make_entry64(io, info, data, crc)
+		else
+			header = make_entry32(io, info, data, crc)
+		end
+
+		if info[:russiandolls]
+			first_header = header
+			last_header = header
+
+			info[:russiandolls].each_with_index do |doll,index|
+				io.rewind
+				doll_header = make_entry64(io, info.merge(doll), data, crc)
+				doll_prefix = [0x4343, doll_header.size].pack('vv')
+
+				if (doll_header.to_string.size + doll_prefix.size) +
+						first_header.to_string.size > local_header_max
+					STDERR.puts "Can't add any more dolls! Dolls #{index}-#{dolls.size-1} omitted."
+				else
+					offset = @offset + first_header.to_string.size + doll_prefix.size
+					last_header.extra_field << doll_prefix << doll_header
+					@dir_entries << { :offset => offset, :len => data.size, :local_header => doll_header }
+					last_header = doll_header
+				end
+			end
+		end
+
+		entry[:local_header] = header
 
 		# write output
 		write header.to_string
-		
+
 		# write data (& any compression?)
 		write data
+
 
 		# write descriptor - not need with current strategy
 		# write DD64.new(:crc32 => crc,
@@ -81,10 +132,21 @@ class ZipWriter
 		#			:raw_data_len => data.size).to_string
 	end
 
+	def local_header_max
+		1024 * 64
+	end
+
+	def threshold
+		1024 * # kb
+		1024 * # mb
+		1024 * # gb
+		2
+	end
+
 	def write_central_directory
 		align
 		@central_directory_offset = @offset
-		
+
 		@dir_entries.each do |entry|
 			offset = entry[:offset]
 			len    = entry[:len]
@@ -96,11 +158,12 @@ class ZipWriter
 				:relative_offset => offset,
 				:disk_no => 0
 			)
+			#p [:header, header.filename, header.crc32, header.last_mod_file_time, header.last_mod_file_date]
 			write CDFileHeader.new(
 				:made_by => 3,
 				:last_mod_file_time => header.last_mod_file_time,
 				:last_mod_file_date => header.last_mod_file_date,
-				:crc32 => header.crc32,				
+				:crc32 => header.crc32,
 				:data_len => LEN64,
 				:raw_data_len => LEN64,
 				:filename => header.filename,
@@ -120,7 +183,7 @@ class ZipWriter
 	def write_zip64_end_of_central_directory
 		#align
 		@zip64_central_directory_offset = @offset
-		
+
 		write Zip64EOCDR.new(
 			:made_by => 45,
 			:this_disk_no => 0,
@@ -137,7 +200,7 @@ class ZipWriter
 		#align
 		write Zip64EOCDL.new(
 			:disk_with_z64_eocdr => 0,
-			# Assume relative offset is relative to disk, as 
+			# Assume relative offset is relative to disk, as
 			# is case elsewhere in Zip spec
 			:relative_offset => @zip64_central_directory_offset,
 			:no_disks => 1
@@ -160,12 +223,12 @@ class ZipWriter
 	def close
 		#[archive decryption header]
 		# ignore
-		#[archive extra data record] 
+		#[archive extra data record]
 		# ignore
 
 		#[central directory]
 		write_central_directory()
-		
+
 		#[zip64 end of central directory record]
 		write_zip64_end_of_central_directory()
 
@@ -194,19 +257,35 @@ class ZipWriter
 		file_overhead = LocalFileHeader.base_size +
 				Zip64ExtraField.base_size
 
+		cd_overhead = CDFileHeader.base_size +
+			Zip64CDExtraField.base_size
+
 		total = 0
 		names_size = 0
-		files.each do |name, io|
-			names_size += name.size
-			total += get_io_size(io) + name.size + file_overhead
+		dolls = 0
+		doll_names_size = 0
+		files.each do |file|
+			names_size += file[:name].size
+			total += get_io_size(file[:io]) + file[:name].size + file_overhead
+
+			if file[:russiandolls]
+				file[:russiandolls].each do |doll|
+					total += doll[:name].size + file_overhead + 4
+					dolls += 1
+					doll_names_size += doll[:name].size
+				end
+			end
 		end
 
 		until (total%4).zero?
 			total += 1
 		end
 
-		total += files.size * (CDFileHeader.base_size + Zip64CDExtraField.base_size)
+		total += files.size * cd_overhead
 		total += names_size
+
+		total += dolls * cd_overhead
+		total += doll_names_size
 
 		total += EOCDR.base_size + Zip64EOCDL.base_size + Zip64EOCDR.base_size
 
@@ -224,27 +303,41 @@ class ZipWriter
 		write_raw(bytes)
 	end
 	def write_raw(bytes)
+		#STDERR.puts "Write: #{'%8i' % bytes.size} @#{'%08i' % @offset}"
 		@io << bytes
 		@offset += bytes.size
 	end
 
 	def self.test
-		files = { }
+		files = []
 		15.times do |x|
-			files["foo-#{x}.txt"] = io = StringIO.new("Foo is #{x} and #{x * x}")
-			(rand()*500).to_i.times do |y|
-				io.puts "And some more lines about blah"
+			files << { :name => ("foo-%02i.txt" % x), :io => StringIO.new("Foo is #{x} and #{x * x}") }
+			info = files.last
+			(x*500).to_i.times do |y|
+				files.last[:io].puts "And some more lines about blah - we are foo #{x}"
 			end
-			io.rewind
+			files.last[:io].rewind
+
+			(rand()*15).to_i.times do |n|
+				info[:russiandolls] ||= []
+				info[:russiandolls] << { :name => ("%s-doll%02i.txt" % [info[:name],n]) }
+			end #if (i % 2).zero?
 		end
+
 		x = predict_size64(files)
 		File.open("test.zip", "w") do |fp|
 			ZipWriter.new(fp) do |writer|
-				files.each do |key, io|
-					writer.add_entry(io, :name => key, :mtime => Time.now)
+				i = 0
+				files.each do |info|
+					info = {:mtime => Time.now, :use => (i < 3 ? 32 : 64)}.merge(info)
+
+					writer.add_entry(info[:io], info)
+					#exit
+					#p info
+					i += 1
 				end
 			end
-			p [:guess, x, :actual, fp.tell]
+			p [:guess, x, :actual, fp.tell, :diff, fp.tell - x]
 		end
 	end
 end

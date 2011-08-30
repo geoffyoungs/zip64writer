@@ -25,7 +25,7 @@ class Block
 
 		def encode(object, value)
 			val = value || @options[:default]
-			[val].pack(@type)
+			[val].pack(@type).force_encoding("ASCII-8BIT")
 		rescue
 			raise "#{value.inspect} (#{val.inspect}?) is not a valid type for #{self.inspect}"
 		end
@@ -81,7 +81,7 @@ class Block
 			if val.nil?
 				io.puts sprintf("%33s %s", 'NULL', field.name)
 			else
-				io.puts sprintf("%16s %16i %2i %s", val.to_s(16), val, 
+				io.puts sprintf("%16s %16i %2i %s", val.to_s(16), val,
 								size_of(field.type), field.name)
 			end
 		end
@@ -105,7 +105,7 @@ class Block
 	end
 
 	def to_string
-		buf = ''
+		buf = ''.force_encoding("ASCII-8BIT")
 		fields.each do |f|
 			buf << f.encode(self, send(f.name))
 		end
@@ -143,6 +143,15 @@ class Zip64ExtraField < Block
 			['v', :header_len],
 			['Q', :raw_data_len],
 			['Q', :data_len]
+	def to_s; to_string; end
+end
+
+class ::String
+	if RUBY_VERSION <= "1.8.7"
+		def force_encoding(what)
+			self
+		end
+	end
 end
 
 class LocalFileHeader < Block
@@ -159,18 +168,42 @@ class LocalFileHeader < Block
 		['V', :raw_data_len],
 		['v', :filename_len],
 		['v', :extra_field_len]
-	
-	attr_reader :filename, :extra_field
+
+	attr_reader :filename
 	def to_string
-		super + "#{@filename}#{extra_field}"
+		extra = extra_field_str
+		self.extra_field_len = extra.size
+		super + "#{@filename}#{extra}"
+	end
+	def	to_s
+		to_string
 	end
 	def filename=(str)
+		str = str.dup.force_encoding('ASCII-8BIT')
 		self.filename_len = str.size
 		@filename = str
 	end
 	def extra_field=(str)
-		self.extra_field_len = str.size
-		@extra_field = str
+		case str
+		when Array
+			@extra_field = str
+		else
+			@extra_field = [str]
+		end
+	end
+	def extra_field
+		(@extra_field ||= [])
+	end
+	def extra_field_str
+		buf = ''.force_encoding('ASCII-8BIT')
+		extra_field.each do |field|
+			if field.respond_to?(:to_string)
+				buf << field.to_string.force_encoding('ASCII-8BIT')
+			else
+				buf << field.to_s.force_encoding('ASCII-8BIT')
+			end
+		end
+		buf
 	end
 end
 
@@ -188,25 +221,28 @@ class CDFileHeader < Block
 		['V', :raw_data_len],
 		['v', :filename_len], # auto
 		['v', :extra_field_len], # auto
-		['v', :file_comment_len], # 
+		['v', :file_comment_len], #
 		['v', :disk_no],
 		['v', :internal_file_attributes],
 		['V', :external_file_attributes],
 		['V', :rel_offset_of_local_header]
-	
+
 	attr_reader :filename, :extra_field, :file_comment
 	def to_string
 		super + "#{@filename}#{extra_field}#{file_comment}"
 	end
 	def file_comment=(str)
+		str = str.force_encoding('ASCII-8BIT')
 		self.file_comment_len = str.size
 		@file_comment = str
 	end
 	def filename=(str)
+		str = str.force_encoding('ASCII-8BIT')
 		self.filename_len = str.size
 		@filename = str
 	end
 	def extra_field=(str)
+		str = str.force_encoding('ASCII-8BIT')
 		self.extra_field_len = str.size
 		@extra_field = str
 	end
@@ -291,6 +327,7 @@ class EOCDR < Block
 		super + "#{@file_comment}"
 	end
 	def file_comment=(str)
+		str = str.force_encoding('ASCII-8BIT')
 		@file_comment = str
 		self.file_comment_len = str.size
 	end
@@ -314,5 +351,5 @@ header.extra_field = Zip64::Zip64ExtraField.new(
 		:raw_data_len => 1125200,
 		:data_len => 1120697)
 
-#STDOUT << 
+#STDOUT <<
 #header.to_string
