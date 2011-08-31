@@ -169,6 +169,14 @@ class LocalFileHeader < Block
 		['v', :filename_len],
 		['v', :extra_field_len]
 
+	def zip64?
+		data_len == LEN64 && raw_data_len == LEN64
+	end
+
+	def version
+		zip64? ? 45 : 10
+	end
+
 	attr_reader :filename
 	def to_string
 		extra = extra_field_str
@@ -226,6 +234,14 @@ class CDFileHeader < Block
 		['v', :internal_file_attributes],
 		['V', :external_file_attributes],
 		['V', :rel_offset_of_local_header]
+
+	def zip64?
+		data_len == LEN64 && raw_data_len == LEN64
+	end
+	
+	def version
+		zip64? ? 45 : 10
+	end
 
 	attr_reader :filename, :extra_field, :file_comment
 	def to_string
@@ -335,7 +351,7 @@ end
 
 end
 
-
+=begin
 header = Zip64::LocalFileHeader.new(:flags => 8,
 		:last_mod_file_time => 0,
 		:last_mod_file_date => 0,
@@ -353,3 +369,5 @@ header.extra_field = Zip64::Zip64ExtraField.new(
 
 #STDOUT <<
 #header.to_string
+=end
+

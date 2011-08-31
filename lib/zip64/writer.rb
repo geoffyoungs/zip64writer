@@ -46,7 +46,8 @@ class ZipWriter
 
 	def make_entry32(io, info, data, crc)
 		header = LocalFileHeader.new(
-			:flags => 0,
+			:flags => (1<<11),
+			:compression => 0,
 			:last_mod_file_time => Zip64.time_to_msdos_time(info[:mtime]),
 			:last_mod_file_date => Zip64.date_to_msdos_date(info[:mtime]),
 			:crc32 => crc,
@@ -80,6 +81,14 @@ class ZipWriter
 		header
 	end
 
+	def make_entry(io, info, data, crc)
+		if info[:use] == 64 || @offset + data.size > self.threshold
+			header = make_entry64(io, info, data, crc)
+		else
+			header = make_entry32(io, info, data, crc)
+		end
+	end
+
 	def add_entry(io, info)
 		info = ensure_metadata(io, info)
 
@@ -90,11 +99,9 @@ class ZipWriter
 		entry = { :offset => @offset, :len => data.size }
 		@dir_entries << entry
 
-		if info[:use] == 64 || @offset + data.size > self.threshold
-			header = make_entry64(io, info, data, crc)
-		else
-			header = make_entry32(io, info, data, crc)
-		end
+		header = make_entry(io, info, data, crc)
+
+		entry[:zip64] = header.zip64?
 
 		if info[:russiandolls]
 			first_header = header
@@ -102,7 +109,7 @@ class ZipWriter
 
 			info[:russiandolls].each_with_index do |doll,index|
 				io.rewind
-				doll_header = make_entry64(io, info.merge(doll), data, crc)
+				doll_header = make_entry(io, info.merge(doll), data, crc)
 				doll_prefix = [0x4343, doll_header.size].pack('vv')
 
 				if (doll_header.to_string.size + doll_prefix.size) +
@@ -111,7 +118,12 @@ class ZipWriter
 				else
 					offset = @offset + first_header.to_string.size + doll_prefix.size
 					last_header.extra_field << doll_prefix << doll_header
-					@dir_entries << { :offset => offset, :len => data.size, :local_header => doll_header }
+					@dir_entries << { 
+						:offset => offset, 
+						:len => data.size, 
+						:local_header => doll_header,
+						:zip64 => doll_header.zip64?
+					}
 					last_header = doll_header
 				end
 			end
@@ -140,7 +152,7 @@ class ZipWriter
 		1024 * # kb
 		1024 * # mb
 		1024 * # gb
-		2
+		2 - local_header_max
 	end
 
 	def write_central_directory
@@ -160,19 +172,21 @@ class ZipWriter
 			)
 			#p [:header, header.filename, header.crc32, header.last_mod_file_time, header.last_mod_file_date]
 			write CDFileHeader.new(
-				:made_by => 3,
+				:flags => header.flags,
+				:compression => header.compression,
+				:made_by => (3 << 8),
 				:last_mod_file_time => header.last_mod_file_time,
 				:last_mod_file_date => header.last_mod_file_date,
 				:crc32 => header.crc32,
-				:data_len => LEN64,
-				:raw_data_len => LEN64,
+				:data_len => entry[:zip64] ? LEN64 : len,
+				:raw_data_len => entry[:zip64] ? LEN64 : len,
 				:filename => header.filename,
-				:extra_field => extra_field.to_string,
+				:extra_field => entry[:zip64] ? extra_field.to_string : '',
 				:file_comment => '',
-				:disk_no => 0xffff,
+				:disk_no => entry[:zip64] ? 0xffff : 0,
 				:internal_file_attributes => 0,
 				:external_file_attributes => 0,
-				:rel_offset_of_local_header => LEN64
+				:rel_offset_of_local_header => entry[:zip64] ? LEN64 : offset
 			).to_string
 		end
 
@@ -185,7 +199,7 @@ class ZipWriter
 		@zip64_central_directory_offset = @offset
 
 		write Zip64EOCDR.new(
-			:made_by => 45,
+			:made_by => 3 << 8,
 			:this_disk_no => 0,
 			:disk_with_cd_no => 0,
 			:total_no_entries_on_this_disk => @dir_entries.size,
@@ -229,14 +243,18 @@ class ZipWriter
 		#[central directory]
 		write_central_directory()
 
-		#[zip64 end of central directory record]
-		write_zip64_end_of_central_directory()
+		if @dir_entries.any? { |entry| entry[:zip64] }
+			#[zip64 end of central directory record]
+			write_zip64_end_of_central_directory()
 
-		#[zip64 end of central directory locator]
-		write_zip64_end_of_central_directory_locator()
+			#[zip64 end of central directory locator]
+			write_zip64_end_of_central_directory_locator()
+		end
 
 		#[end of central directory record]
 		write_end_of_central_directory_record()
+
+		write_last()
 	end
 
 	def self.get_io_size(io)
@@ -307,6 +325,10 @@ class ZipWriter
 		@io << bytes
 		@offset += bytes.size
 	end
+	def write_last(bytes=nil)
+		bytes = bytes.to_string if bytes.respond_to?(:to_string)
+		write_raw(bytes) unless bytes.nil? or bytes.empty?
+	end
 
 	def self.test
 		files = []
@@ -345,6 +367,17 @@ class GoliathWriter < ZipWriter
 	def write_raw(bytes)
 		@io.chunked_stream_send(bytes)
 		@offset += bytes.size
+	end
+end
+class EventMachineWriter < ZipWriter
+	def write_raw(bytes)
+		@io.send_data(bytes)
+		@offset += bytes.size
+	end
+	def write_last(bytes=nil)
+		bytes = bytes.to_string if bytes.respond_to?(:to_string)
+		write_raw(bytes) unless bytes.nil? or bytes.empty?
+		@io.finish		
 	end
 end
 end
