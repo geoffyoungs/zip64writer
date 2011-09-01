@@ -9,7 +9,6 @@ require 'zip64/writer'
 module Zipper
 	module_function
 	class FeederFiber
-		@mutex = Mutex.new
 		def self.size
 			@fibers && @fibers.size || 0
 		end
@@ -27,23 +26,19 @@ module Zipper
 		def self.ensure_poll
 			return if @pt
 			puts "Create timer"
-			@pt = EM.add_periodic_timer(0.02) { coop }
+			#@pt = EM.add_periodic_timer(0.02) { coop }
 		end
 		def self.add(fiber)
-			@mutex.synchronize do
-				@fibers ||= []
-				@fibers.push(fiber)
-				ensure_poll
-			end
+			@fibers ||= []
+			@fibers.push(fiber)
+			#ensure_poll
 		end
 		def self.remove(fiber)
-			@mutex.synchronize do
-				@fibers.delete(fiber) if @fibers
-				if @fibers.empty? && @pt
-					puts "Cancel timer"
-					@pt.cancel
-					@pt = nil
-				end
+			@fibers.delete(fiber) if @fibers
+			if @fibers.empty? && @pt
+				puts "Cancel timer"
+				@pt.cancel
+				@pt = nil
 			end
 		end
 		attr_reader :fiber, :conn, :head
@@ -77,11 +72,21 @@ module Zipper
 				end
 
 				case head.request_url
+				when /russian/
+					name += "-russiandolls"
+					russiandolls = true
+				#when /z32/
+				else
+					name += '-nodolls'
+					russiandolls = false
+				end
+
+				case head.request_url
 				when /limit-(\d+)([kmgt])/i
 					class << writer
 						attr_accessor :threshold
 					end
-					name += "-limit#{$1}#{$2}"
+					name += "-limit-#{$1}#{$2}"
 					thresh, factor = $1.to_i, $2
 					factor = case factor.downcase
 					when 'k'
@@ -108,6 +113,8 @@ module Zipper
 				writeln('Content-Disposition: attachment; filename="%s.zip"' % name)
 				writeln("")
 
+				STDERR.puts "Sending: #{name}.zip"
+
 				manifest = MANIFEST.dup
 
 
@@ -118,20 +125,23 @@ module Zipper
 				no_files_since_yield = 0
 
 				until manifest.empty?
-					entry = manifest.shift
-
 					if buffer_full? or no_files_since_yield > 3
+						EM.next_tick { @fiber.resume }
 						Fiber.yield
 						no_files_since_yield = 0
+						next
 					else
 						no_files_since_yield += 1
 					end
 
+					entry = manifest.shift
+
 					File.open(entry, 'rb') { |fp|
 						time = Time.now
 						name = File.basename(entry)
-						writer.add_entry(fp, :name => name, :mtime => time,
-										 :russiandolls => [ { :name => ("duplicates/%s" % name) } ])
+						info = {:name => name, :mtime => time}
+						info[:russiandolls] = [ { :name => ("duplicates/%s" % name) } ] if russiandolls
+						writer.add_entry(fp, info)
 					}
 				end
 
@@ -177,15 +187,43 @@ module Zipper
 				STDERR.puts [:body, data].inspect
 			end
 			@parser.on_message_complete = lambda do
-				@feeder = FeederFiber.new(self, @headers.pop)
-
-				#str = "OK :)"
-				#send_data("HTTP/1.1 200 OK\r\n")
-				#send_data("Content-Length: #{str.size}\r\n")
-				#send_data("\r\n")
-				#send_data(str)
-				# Write & close connection?
+				case @parser.request_url
+				when /.zip$/
+					@feeder = FeederFiber.new(self, @headers.pop)
+				else
+					static_page({ :type => 'text/html' }, <<-EOP)
+<!DOCTYPE html>
+<html>
+<head>
+	<title>zipper.rb test</title>
+</head>
+<body>
+<h1>Standard Test Zip Archives</h1>
+<ul>
+	<li><a href="/sample-z32-limit-200m.zip">Standard Zip File</a> - Zip32, Threshold kicks in at 200Mb</li>
+	<li><a href="/sample-z64.zip">Zip file with zip64&trade;</a> - Zip64 extensions on everything</li>
+	<li><a href="/sample-z32-limit-800m.zip">Standard Zip File</a> - No fanciness</li>
+</ul>
+<h1>Russian Doll Test Zip Archives</h1>
+<ul>
+	<li><a href="/sample-russian-z32-limit-200m.zip">Standard Zip File</a> - Zip32, Threshold kicks in at 200Mb, plus dolls</li>
+	<li><a href="/sample-russian-z64.zip">Zip file with zip64&trade;</a> - Zip64 extensions on everything, plus dolls</li>
+	<li><a href="/sample-russian-z32-limit-800m.zip">Standard Zip File</a> - Only dolls</li>
+</ul>
+</body>
+</html>
+EOP
+				end
 			end
+		end
+
+		def static_page(info, data)
+			send_data("HTTP/1.1 200 OK\r\n")
+			send_data("Content-Type: #{info[:type]}\r\n") if info[:type]
+			send_data("Content-Length: #{data.size}\r\n")
+			send_data("\r\n")
+			return if @parser.http_method == "HEAD"
+			send_data(data)
 		end
 
 		def unbind
