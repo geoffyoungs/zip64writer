@@ -280,6 +280,24 @@ class Zip64CDExtraField < Block
 	end
 end
 
+class UnixExtraField < Block
+	SIG = 0x000d
+	fields ['v', :signature, SIG],
+		['v', :size],
+		['V', :atime],
+		['V', :mtime],
+		['v', :uid],
+		['v', :gid],
+		['A*', :data, '']
+	
+	def to_string
+		@size = @data.to_s.size
+		fields.each { |field| @size += size_of(field.type) }
+		@size -= 4
+		super
+	end
+end
+
 class DigSig < Block
 	SIG = 0x05054b50
 	fields  ['V', :signature, SIG],
