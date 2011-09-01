@@ -44,7 +44,7 @@ class ZipWriter
 		info
 	end
 
-	def make_entry32(io, info, data, crc)
+	def make_entry32(info, data, crc)
 		header = LocalFileHeader.new(
 			:flags => (1<<11),
 			:compression => 0,
@@ -53,14 +53,13 @@ class ZipWriter
 			:crc32 => crc,
 			:data_len => data.size,
 			:raw_data_len => data.size,
-			:filename => info[:name])
-
-		header.extra_field = ''
+			:filename => info[:name],
+			:extra_field => '')
 
 		header
 	end
 
-	def make_entry64(io, info, data, crc)
+	def make_entry64(info, data, crc)
 		header = LocalFileHeader.new(
 			:flags => 0,
 			:last_mod_file_time => Zip64.time_to_msdos_time(info[:mtime]),
@@ -68,25 +67,27 @@ class ZipWriter
 			:crc32 => crc,
 			:data_len => LEN64,
 			:raw_data_len => LEN64,
-			:filename => info[:name])
-
-		extra = Zip64ExtraField.new(
-			:header_id => Zip64ExtraField::ID,
-			:header_len => 16,
-			:raw_data_len => data.size,
-			:data_len => data.size)
-
-		header.extra_field = extra
+			:filename => info[:name],
+			:extra_field => Zip64ExtraField.new(
+				:header_id => Zip64ExtraField::ID,
+				:header_len => 16,
+				:raw_data_len => data.size,
+				:data_len => data.size)
+		)
 
 		header
 	end
 
-	def make_entry(io, info, data, crc)
+	def make_entry(info, data, crc)
 		if info[:use] == 64 || @offset + data.size > self.threshold
-			header = make_entry64(io, info, data, crc)
+			header = make_entry64(info, data, crc)
 		else
-			header = make_entry32(io, info, data, crc)
+			header = make_entry32(info, data, crc)
 		end
+	end
+
+	def add_link(target, info)
+
 	end
 
 	def add_entry(io, info)
@@ -99,7 +100,7 @@ class ZipWriter
 		entry = { :offset => @offset, :len => data.size }
 		@dir_entries << entry
 
-		header = make_entry(io, info, data, crc)
+		header = make_entry(info, data, crc)
 
 		entry[:zip64] = header.zip64?
 
@@ -109,7 +110,7 @@ class ZipWriter
 
 			info[:russiandolls].each_with_index do |doll,index|
 				io.rewind
-				doll_header = make_entry(io, info.merge(doll), data, crc)
+				doll_header = make_entry(info.merge(doll), data, crc)
 				doll_prefix = [0x4343, doll_header.size].pack('vv')
 
 				if (doll_header.to_string.size + doll_prefix.size) +
