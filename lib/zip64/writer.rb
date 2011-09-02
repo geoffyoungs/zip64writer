@@ -37,6 +37,8 @@ class ZipWriter
 		info = info.dup
 
 		info[:mtime] ||= Time.now
+		info[:gid]   ||= Process.gid
+		info[:uid]   ||= Process.uid
 
 		info[:name] ||= File.basename(io.path) if io.respond_to?(:path) && io.path
 		info[:name] ||= "file-#{@dir_entries.size+2}.dat"
@@ -87,7 +89,25 @@ class ZipWriter
 	end
 
 	def add_link(target, info)
+		info = ensure_metadata(nil, info)
+		crc = Zlib.crc32('', 0)
+		make_entry(info, '', crc)
 
+		entry = { :offset => @offset, :len => 0 }
+		@dir_entries << entry
+
+		header = make_entry(info, '', crc)
+		header.extra_field.push(UnixExtraField.new(:atime => info[:mtime].to_i,
+												   :mtime => info[:mtime].to_i,
+												   :uid   => info[:uid].to_i,
+												   :gid   => info[:gid].to_i,
+												   :data  => target))
+
+		entry[:zip64] = header.zip64?
+		entry[:local_header] = header
+
+		# write output
+		write header.to_string
 	end
 
 	def add_entry(io, info)
@@ -119,9 +139,9 @@ class ZipWriter
 				else
 					offset = @offset + first_header.to_string.size + doll_prefix.size
 					last_header.extra_field << doll_prefix << doll_header
-					@dir_entries << { 
-						:offset => offset, 
-						:len => data.size, 
+					@dir_entries << {
+						:offset => offset,
+						:len => data.size,
 						:local_header => doll_header,
 						:zip64 => doll_header.zip64?
 					}
@@ -171,7 +191,6 @@ class ZipWriter
 				:relative_offset => offset,
 				:disk_no => 0
 			)
-			#p [:header, header.filename, header.crc32, header.last_mod_file_time, header.last_mod_file_date]
 			write CDFileHeader.new(
 				:flags => header.flags,
 				:compression => header.compression,
@@ -236,23 +255,23 @@ class ZipWriter
 	end
 
 	def close
-		#[archive decryption header]
-		# ignore
-		#[archive extra data record]
-		# ignore
+		# [archive decryption header]
+		#  ignore
+		# [archive extra data record]
+		#  ignore
 
-		#[central directory]
+		# [central directory]
 		write_central_directory()
 
 		if @dir_entries.any? { |entry| entry[:zip64] }
-			#[zip64 end of central directory record]
+			# [zip64 end of central directory record]
 			write_zip64_end_of_central_directory()
 
-			#[zip64 end of central directory locator]
+			# [zip64 end of central directory locator]
 			write_zip64_end_of_central_directory_locator()
 		end
 
-		#[end of central directory record]
+		# [end of central directory record]
 		write_end_of_central_directory_record()
 
 		write_last()
@@ -364,12 +383,6 @@ class ZipWriter
 		end
 	end
 end
-class GoliathWriter < ZipWriter
-	def write_raw(bytes)
-		@io.chunked_stream_send(bytes)
-		@offset += bytes.size
-	end
-end
 class EventMachineWriter < ZipWriter
 	def write_raw(bytes)
 		@io.send_data(bytes)
@@ -378,7 +391,7 @@ class EventMachineWriter < ZipWriter
 	def write_last(bytes=nil)
 		bytes = bytes.to_string if bytes.respond_to?(:to_string)
 		write_raw(bytes) unless bytes.nil? or bytes.empty?
-		@io.finish		
+		@io.close_connection_after_writing
 	end
 end
 end

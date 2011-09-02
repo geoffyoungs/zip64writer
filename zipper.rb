@@ -51,8 +51,9 @@ module Zipper
 				@io.send_data(data)
 				@io.send_data("\r\n")
 			end
-			def finish
+			def close_connection_after_writing
 				@io.send_data("0\r\n\r\n")
+				@io.close_connection_after_writing
 			end
 		end
 		MANIFEST = Dir["/home/geoff/Photos/*.jpg"].sort
@@ -75,10 +76,18 @@ module Zipper
 				when /russian/
 					name += "-russiandolls"
 					russiandolls = true
-				#when /z32/
 				else
 					name += '-nodolls'
 					russiandolls = false
+				end
+
+				case head.request_url
+				when /links/
+					name += "-links"
+					links = true
+				else
+					name += '-nolinks'
+					links = false
 				end
 
 				case head.request_url
@@ -117,11 +126,6 @@ module Zipper
 
 				manifest = MANIFEST.dup
 
-
-				#def writer.threshold
-				#	1024 * 1024 * 200
-				#end
-
 				no_files_since_yield = 0
 
 				until manifest.empty?
@@ -140,13 +144,13 @@ module Zipper
 						time = Time.now
 						name = File.basename(entry)
 						info = {:name => name, :mtime => time}
-						info[:russiandolls] = [ { :name => ("duplicates/%s" % name) } ] if russiandolls
+						info[:russiandolls] = [ { :name => ("dup-%s" % name) } ] if russiandolls
 						writer.add_entry(fp, info)
+						writer.add_link(info[:name], info.merge(:name => 'link-%s' % info[:name])) if links
 					}
 				end
 
 				writer.close
-				@conn.close_connection_after_writing
 				FeederFiber.remove(self)
 			end
 
@@ -202,13 +206,17 @@ module Zipper
 <ul>
 	<li><a href="/sample-z32-limit-200m.zip">Standard Zip File</a> - Zip32, Threshold kicks in at 200Mb</li>
 	<li><a href="/sample-z64.zip">Zip file with zip64&trade;</a> - Zip64 extensions on everything</li>
+	<li><a href="/sample-links-z64.zip">Zip file with zip64&trade;</a> - Zip64 extensions on everything + links</li>
 	<li><a href="/sample-z32-limit-800m.zip">Standard Zip File</a> - No fanciness</li>
+	<li><a href="/sample-z32-links-limit-800m.zip">Standard Zip File</a> - No fanciness except links</li>
 </ul>
 <h1>Russian Doll Test Zip Archives</h1>
 <ul>
 	<li><a href="/sample-russian-z32-limit-200m.zip">Standard Zip File</a> - Zip32, Threshold kicks in at 200Mb, plus dolls</li>
 	<li><a href="/sample-russian-z64.zip">Zip file with zip64&trade;</a> - Zip64 extensions on everything, plus dolls</li>
+	<li><a href="/sample-russian-links-z64.zip">Zip file with zip64&trade;</a> - Zip64 extensions on everything, plus dolls, + links</li>
 	<li><a href="/sample-russian-z32-limit-800m.zip">Standard Zip File</a> - Only dolls</li>
+	<li><a href="/sample-russian-z32-links-limit-800m.zip">Standard Zip File</a> - Only dolls & links</li>
 </ul>
 </body>
 </html>
@@ -224,6 +232,7 @@ EOP
 			send_data("\r\n")
 			return if @parser.http_method == "HEAD"
 			send_data(data)
+			close_connection_after_writing
 		end
 
 		def unbind

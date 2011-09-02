@@ -57,20 +57,25 @@ class Block
 		fields.inject(0) { |t, f| size_of(f.type) + t }
 	end
 
+	def read_field_from(fp, field)
+		if (sz = size_of(field.type)).nonzero?
+			val = fp.read(sz).unpack(field.type).first
+			send("#{field.name}=", val)
+		else
+			fn = "#{field.name}_len"
+			if field.type == "A*" && o.respond_to?(fn) && o.send(fn)
+				send("#{field.name}=", fp.read(o.send(fn)))
+			else
+				puts "#{field.name} un-fetchable"
+			end
+		end
+	end
+
 	def self.read_from(fp, offset)
 		o = new()
 		fields[offset..-1].each do |field|
-			if (sz = size_of(field.type)).nonzero?
-				val = fp.read(sz).unpack(field.type).first
-				o.send("#{field.name}=", val)
-			else
-				fn = "#{field.name}_len"
-				if field.type == "A*" && o.respond_to?(fn) && o.send(fn)
-					o.send("#{field.name}=", fp.read(o.send(fn)))
-				else
-					puts "#{field.name} un-fetchable"
-				end
-			end
+			next if o.respond_to?(:skip_read?) && o.skip_read?(field)
+			o.read_field_from(fp, field)
 		end
 		o
 	end
@@ -90,6 +95,8 @@ class Block
 
 	def self.size_of(type)
 		case type
+		when 'C', 'c'
+			1
 		when 'v'
 			2
 		when 'V'
@@ -107,11 +114,15 @@ class Block
 	def to_string
 		buf = ''.force_encoding("ASCII-8BIT")
 		fields.each do |f|
-			buf << f.encode(self, send(f.name))
+			buf << pack_field(f)
 		end
 		buf
 	end
 	alias :to_s :to_string
+
+	def pack_field(field)
+		f.encode(self, send(f.name))
+	end
 
 	def size
 		to_string.size
@@ -238,7 +249,7 @@ class CDFileHeader < Block
 	def zip64?
 		data_len == LEN64 && raw_data_len == LEN64
 	end
-	
+
 	def version
 		zip64? ? 45 : 10
 	end
@@ -283,18 +294,78 @@ end
 class UnixExtraField < Block
 	SIG = 0x000d
 	fields ['v', :signature, SIG],
-		['v', :size],
-		['V', :atime],
-		['V', :mtime],
-		['v', :uid],
-		['v', :gid],
+		['v',  :size],
+		['V',  :atime],
+		['V',  :mtime],
+		['v',  :uid],
+		['v',  :gid],
 		['A*', :data, '']
-	
+
 	def to_string
 		@size = @data.to_s.size
 		fields.each { |field| @size += size_of(field.type) }
 		@size -= 4
 		super
+	end
+end
+
+class ExtendedTimestampField < Block
+	SIG = 0x5455
+	fields ['v', :signature, SIG],
+		['v',  :size],
+		['C',  :info_bits],
+		['V',  :mtime],
+		['V',  :atime],
+		['V',  :ctime]
+	def	skip_read?(field)
+		case field.name
+		when :mtime
+			(@info_bits&1).zero?
+		when :atime
+			(@info_bits&2).zero?
+		when :ctime
+			(@info_bits&4).zero?
+		else
+			false
+		end
+	end
+end
+
+class InfoZipNewUnixExtraField < Block
+	SIG = 0x7875
+	fields ['v', :signature, SIG],
+		['v', :size],
+		['C', :version],
+		['C', :uid_size],
+		['V', :uid],
+		['C', :gid_size],
+		['V', :gid]
+	MAP = { 1 => 'C', 2 => 'v', 4 => 'V'}
+
+	def pack_field(field)
+		case field.name
+		when :uid
+			type = MAP[@uid_size]
+			[@uid].pack(type).force_encoding('ASCII-8BIT')
+		when :gid
+			type = MAP[@gid_size]
+			[@gid].pack(type).force_encoding('ASCII-8BIT')
+		else
+			super
+		end
+	end
+
+	def read_field_from(fp, field)
+		case field.name
+		when :uid
+			type = MAP[@uid_size]
+			@uid = fp.read(@uid_size).unpack(type).first
+		when :gid
+			type = MAP[@gid_size]
+			@gid = fp.read(@gid_size).unpack(type).first
+		else
+			super
+		end
 	end
 end
 
@@ -369,23 +440,4 @@ end
 
 end
 
-=begin
-header = Zip64::LocalFileHeader.new(:flags => 8,
-		:last_mod_file_time => 0,
-		:last_mod_file_date => 0,
-		:crc32 => 0x57f43c0a,
-		:data_len => Zip64::LEN64,
-		:raw_data_len => Zip64::LEN64,
-		:filename => "-",
-		:extra_field => "")
-
-header.extra_field = Zip64::Zip64ExtraField.new(
-		:header_id => Zip64::Zip64ExtraField::ID,
-		:header_len => 16,
-		:raw_data_len => 1125200,
-		:data_len => 1120697)
-
-#STDOUT <<
-#header.to_string
-=end
 
