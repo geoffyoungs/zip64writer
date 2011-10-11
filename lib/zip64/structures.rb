@@ -121,7 +121,7 @@ class Block
 	alias :to_s :to_string
 
 	def pack_field(field)
-		f.encode(self, send(f.name))
+		field.encode(self, send(field.name))
 	end
 
 	def size
