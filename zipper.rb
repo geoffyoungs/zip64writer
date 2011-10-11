@@ -3,6 +3,7 @@ $:<< '../lib' << 'lib'
 require 'http/parser'
 require "em-synchrony"
 require 'fiber'
+require 'json'
 
 require 'zip64/writer'
 
@@ -160,16 +161,14 @@ module Zipper
 		end
 
 		def resume
-			#STDERR.puts "Resuming #{self.object_id} - #{Time.now.strftime('%H:%M:%S')}"
 			@fiber.resume
 		end
 
 		def buffer_threshold
-			1024 * 50
+			1024 * 50 # 50k
 		end
 
 		def buffer_full?
-			#STDERR.puts "Check: #{@conn.get_outbound_data_size} #{buffer_threshold}"
 			@conn.get_outbound_data_size > buffer_threshold
 		end
 
@@ -191,36 +190,19 @@ module Zipper
 				STDERR.puts [:body, data].inspect
 			end
 			@parser.on_message_complete = lambda do
+				bits = @parser.request_url.split(%r'/')
+				case bits[0]
+				when 'downloads'
+					
+				when 'register'
+					
+				end
 				case @parser.request_url
 				when /.zip$/
 					@feeder = FeederFiber.new(self, @headers.pop)
 				else
-					static_page({ :type => 'text/html' }, <<-EOP)
-<!DOCTYPE html>
-<html>
-<head>
-	<title>zipper.rb test</title>
-</head>
-<body>
-<h1>Standard Test Zip Archives</h1>
-<ul>
-	<li><a href="/sample-z32-limit-200m.zip">Standard Zip File</a> - Zip32, Threshold kicks in at 200Mb</li>
-	<li><a href="/sample-z64.zip">Zip file with zip64&trade;</a> - Zip64 extensions on everything</li>
-	<li><a href="/sample-links-z64.zip">Zip file with zip64&trade;</a> - Zip64 extensions on everything + links</li>
-	<li><a href="/sample-z32-limit-800m.zip">Standard Zip File</a> - No fanciness</li>
-	<li><a href="/sample-z32-links-limit-800m.zip">Standard Zip File</a> - No fanciness except links</li>
-</ul>
-<h1>Russian Doll Test Zip Archives</h1>
-<ul>
-	<li><a href="/sample-russian-z32-limit-200m.zip">Standard Zip File</a> - Zip32, Threshold kicks in at 200Mb, plus dolls</li>
-	<li><a href="/sample-russian-z64.zip">Zip file with zip64&trade;</a> - Zip64 extensions on everything, plus dolls</li>
-	<li><a href="/sample-russian-links-z64.zip">Zip file with zip64&trade;</a> - Zip64 extensions on everything, plus dolls, + links</li>
-	<li><a href="/sample-russian-z32-limit-800m.zip">Standard Zip File</a> - Only dolls</li>
-	<li><a href="/sample-russian-z32-links-limit-800m.zip">Standard Zip File</a> - Only dolls & links</li>
-</ul>
-</body>
-</html>
-EOP
+					$index ||= DATA.read
+					static_page({ :type => 'text/html' }, $index)
 				end
 			end
 		end
@@ -272,4 +254,29 @@ EM.synchrony do
 
 end
 
+__END__
+<!DOCTYPE html>
+<html>
+<head>
+	<title>zipper.rb test</title>
+</head>
+<body>
+<h1>Standard Test Zip Archives</h1>
+<ul>
+	<li><a href="/sample-z32-limit-200m.zip">Standard Zip File</a> - Zip32, Threshold kicks in at 200Mb</li>
+	<li><a href="/sample-z64.zip">Zip file with zip64&trade;</a> - Zip64 extensions on everything</li>
+	<li><a href="/sample-links-z64.zip">Zip file with zip64&trade;</a> - Zip64 extensions on everything + links</li>
+	<li><a href="/sample-z32-limit-800m.zip">Standard Zip File</a> - No fanciness</li>
+	<li><a href="/sample-z32-links-limit-800m.zip">Standard Zip File</a> - No fanciness except links</li>
+</ul>
+<h1>Russian Doll Test Zip Archives</h1>
+<ul>
+	<li><a href="/sample-russian-z32-limit-200m.zip">Standard Zip File</a> - Zip32, Threshold kicks in at 200Mb, plus dolls</li>
+	<li><a href="/sample-russian-z64.zip">Zip file with zip64&trade;</a> - Zip64 extensions on everything, plus dolls</li>
+	<li><a href="/sample-russian-links-z64.zip">Zip file with zip64&trade;</a> - Zip64 extensions on everything, plus dolls, + links</li>
+	<li><a href="/sample-russian-z32-limit-800m.zip">Standard Zip File</a> - Only dolls</li>
+	<li><a href="/sample-russian-z32-links-limit-800m.zip">Standard Zip File</a> - Only dolls & links</li>
+</ul>
+</body>
+</html>
 

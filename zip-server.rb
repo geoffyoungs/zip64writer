@@ -39,49 +39,50 @@ class ZipStream < Goliath::API
 	end
 
 	def response(env)
-	env.logger.info(env.inspect)
-	env.logger.info("Self: "+self.inspect)
-	env.logger.info("Instance variables: "+instance_variables.sort.inspect)
+		env.logger.info(env.inspect)
+		env.logger.info("Self: "+self.inspect)
+		env.logger.info("Instance variables: "+instance_variables.sort.inspect)
 
-	filename = "sample.zip"
-	manifest = Dir["/home/geoff/Photos/*.jpg"]
+		filename = "sample.zip"
+		manifest = Dir["/home/geoff/Photos/*.jpg"]
 
-	writer = Zip64::GoliathWriter.new(env)
+		writer = Zip64::GoliathWriter.new(env)
 
-	pt = EM.add_periodic_timer(0.1) do
+		pt = EM.add_periodic_timer(0.1) do
 			entry = manifest.shift
-	if entry
-		File.open(entry, 'rb') { |fp|
-			time = Time.now
-			#env.logger.info("Writing: #{entry}")
-			writer.add_entry(fp, :name => File.basename(entry), :mtime => time)
-		}
-	else
-		env.logger.info("Finishing up: #{entry}")
-		writer.close
-		env.chunked_stream_close
-		pt.cancel
-	end
-	end
+			if entry
+				File.open(entry, 'rb') { |fp|
+					time = Time.now
+					#env.logger.info("Writing: #{entry}")
+					writer.add_entry(fp, :name => File.basename(entry), :mtime => time)
+				}
+			else
+				env.logger.info("Finishing up: #{entry}")
+				writer.close
+				env.chunked_stream_close
+				pt.cancel
+			end
+		end
 
+		#send_next = lambda do
+		#	entry = manifest.shift
+		#	writer.add_entry(File.open(entry), :name => File.basename(entry))
+		#end
 
-	#send_next = lambda do
-	#	entry = manifest.shift
-	#	writer.add_entry(File.open(entry), :name => File.basename(entry))
-	#end
+		#until manifest.empty?
+		#	if env.request.conn.get_outbound_data_size >= BUF
+		#		EventMachine.next_tick(&send_next)
+		#	else
+		#		send_next
+		#	end
+		#end
 
-	#until manifest.empty?
-	#	if env.request.conn.get_outbound_data_size >= BUF
-	#		EventMachine.next_tick(&send_next)
-	#	else
-	#		send_next
-	#	end
-	#end
-
-	#writer.close
+		#writer.close
 		#env.chunked_stream_close
 
-		headers = { 'Content-Type' => 'application/zip', 'X-Stream' => 'Goliath', 'Content-Disposition' => 'attachment; filename="%s"' % filename }
+		headers = { 'Content-Type' => 'application/zip', 
+					'X-Stream' => 'Goliath', 
+					'Content-Disposition' => 'attachment; filename="%s"' % filename }
 		chunked_streaming_response(200, headers)
 	end
 end
