@@ -25,7 +25,7 @@ class Block
 
 		def encode(object, value)
 			val = value || @options[:default]
-			[val].pack(@type).force_encoding("ASCII-8BIT")
+			[val].pack(@type).zip64_force_encoding("ASCII-8BIT")
 		rescue
 			raise "#{value.inspect} (#{val.inspect}?) is not a valid type for #{self.inspect}"
 		end
@@ -112,7 +112,7 @@ class Block
 	end
 
 	def to_string
-		buf = ''.force_encoding("ASCII-8BIT")
+		buf = ''.zip64_force_encoding("ASCII-8BIT")
 		fields.each do |f|
 			buf << pack_field(f)
 		end
@@ -158,10 +158,8 @@ class Zip64ExtraField < Block
 end
 
 class ::String
-	if RUBY_VERSION <= "1.8.7"
-		def force_encoding(what)
-			self
-		end
+	def zip64_force_encoding(what)
+		respond_to?(:force_encoding) and force_encoding(what) or self
 	end
 end
 
@@ -198,7 +196,7 @@ class LocalFileHeader < Block
 		to_string
 	end
 	def filename=(str)
-		str = str.dup.force_encoding('ASCII-8BIT')
+		str = str.dup.zip64_force_encoding('ASCII-8BIT')
 		self.filename_len = str.size
 		@filename = str
 	end
@@ -214,12 +212,12 @@ class LocalFileHeader < Block
 		(@extra_field ||= [])
 	end
 	def extra_field_str
-		buf = ''.force_encoding('ASCII-8BIT')
+		buf = ''.zip64_force_encoding('ASCII-8BIT')
 		extra_field.each do |field|
 			if field.respond_to?(:to_string)
-				buf << field.to_string.force_encoding('ASCII-8BIT')
+				buf << field.to_string.zip64_force_encoding('ASCII-8BIT')
 			else
-				buf << field.to_s.force_encoding('ASCII-8BIT')
+				buf << field.to_s.zip64_force_encoding('ASCII-8BIT')
 			end
 		end
 		buf
@@ -259,17 +257,17 @@ class CDFileHeader < Block
 		super + "#{@filename}#{extra_field}#{file_comment}"
 	end
 	def file_comment=(str)
-		str = str.force_encoding('ASCII-8BIT')
+		str = str.zip64_force_encoding('ASCII-8BIT')
 		self.file_comment_len = str.size
 		@file_comment = str
 	end
 	def filename=(str)
-		str = str.force_encoding('ASCII-8BIT')
+		str = str.zip64_force_encoding('ASCII-8BIT')
 		self.filename_len = str.size
 		@filename = str
 	end
 	def extra_field=(str)
-		str = str.force_encoding('ASCII-8BIT')
+		str = str.zip64_force_encoding('ASCII-8BIT')
 		self.extra_field_len = str.size
 		@extra_field = str
 	end
@@ -346,10 +344,10 @@ class InfoZipNewUnixExtraField < Block
 		case field.name
 		when :uid
 			type = MAP[@uid_size]
-			[@uid].pack(type).force_encoding('ASCII-8BIT')
+			[@uid].pack(type).zip64_force_encoding('ASCII-8BIT')
 		when :gid
 			type = MAP[@gid_size]
-			[@gid].pack(type).force_encoding('ASCII-8BIT')
+			[@gid].pack(type).zip64_force_encoding('ASCII-8BIT')
 		else
 			super
 		end
@@ -432,7 +430,7 @@ class EOCDR < Block
 		super + "#{@file_comment}"
 	end
 	def file_comment=(str)
-		str = str.force_encoding('ASCII-8BIT')
+		ctr = str.zip64_force_encoding('ASCII-8BIT')
 		@file_comment = str
 		self.file_comment_len = str.size
 	end
